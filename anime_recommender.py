@@ -13,31 +13,41 @@ class AnimeRecommender:
         self.anime_data = None
         self.tfv = None
         
-    def download_model(self, file_id, model_path="anime_model.pkl"):
+    def download_model(self, dropbox_url, model_path="anime_model.pkl"):
         """
-        Descarga el modelo desde Google Drive
+        Descarga el modelo desde Dropbox
         
         Args:
-            file_id: ID del archivo en Google Drive
+            dropbox_url: URL de descarga directa de Dropbox
             model_path: Ruta donde guardar el modelo
         """
         if os.path.exists(model_path):
             print(f"📂 Modelo ya existe localmente: {model_path}")
             return True
         
-        print("🔄 Descargando modelo desde Google Drive...")
+        print("🔄 Descargando modelo desde Dropbox...")
         
         try:
-            # URL de descarga directa de Google Drive
-            url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            # Asegurar que la URL tenga dl=1 para descarga directa
+            if "dl=0" in dropbox_url:
+                dropbox_url = dropbox_url.replace("dl=0", "dl=1")
+            elif "dl=1" not in dropbox_url:
+                dropbox_url = dropbox_url + ("&dl=1" if "?" in dropbox_url else "?dl=1")
             
-            # Hacer la petición
-            response = requests.get(url, stream=True)
+            # Headers para evitar bloqueos
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            # Hacer la petición con timeout
+            response = requests.get(dropbox_url, headers=headers, stream=True, timeout=300)
             response.raise_for_status()
             
-            # Guardar archivo
+            # Obtener tamaño total si está disponible
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
+            
+            print(f"📊 Tamaño total: {total_size / 1024 / 1024:.1f}MB" if total_size > 0 else "📊 Descargando...")
             
             with open(model_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -46,17 +56,35 @@ class AnimeRecommender:
                         downloaded += len(chunk)
                         
                         # Mostrar progreso cada 50MB
-                        if downloaded % (50 * 1024 * 1024) == 0:
-                            progress = (downloaded / total_size) * 100 if total_size > 0 else 0
-                            print(f"📥 Descargando... {progress:.1f}%")
+                        if total_size > 0 and downloaded % (50 * 1024 * 1024) == 0:
+                            progress = (downloaded / total_size) * 100
+                            print(f"📥 Descargando... {progress:.1f}% ({downloaded / 1024 / 1024:.1f}MB)")
             
-            print(f"✅ Modelo descargado exitosamente: {model_path}")
-            return True
+            # Verificar que el archivo se descargó correctamente
+            if os.path.exists(model_path) and os.path.getsize(model_path) > 1024:  # Al menos 1KB
+                final_size = os.path.getsize(model_path) / 1024 / 1024
+                print(f"✅ Modelo descargado exitosamente: {model_path} ({final_size:.1f}MB)")
+                return True
+            else:
+                print("❌ Error: Archivo descargado parece estar vacío o corrupto")
+                if os.path.exists(model_path):
+                    os.remove(model_path)
+                return False
             
+        except requests.exceptions.Timeout:
+            print("❌ Error: Timeout en la descarga (archivo muy grande)")
+            if os.path.exists(model_path):
+                os.remove(model_path)
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error de conexión: {e}")
+            if os.path.exists(model_path):
+                os.remove(model_path)
+            return False
         except Exception as e:
             print(f"❌ Error descargando modelo: {e}")
             if os.path.exists(model_path):
-                os.remove(model_path)  # Limpiar archivo parcial
+                os.remove(model_path)
             return False
         
     def fit(self, data):
@@ -196,12 +224,13 @@ class AnimeRecommender:
             return False
         
         try:
+            print("📚 Cargando modelo...")
             model_data = joblib.load(filepath)
             self.sig_matrix = model_data['sig_matrix']
             self.rec_indices = model_data['rec_indices']
             self.anime_data = model_data['anime_data']
             self.tfv = model_data['tfv']
-            print(f"📂 Modelo cargado desde: {filepath}")
+            print(f"✅ Modelo cargado desde: {filepath}")
             return True
         except Exception as e:
             print(f"❌ Error cargando modelo: {e}")
